@@ -2098,7 +2098,7 @@ int count_mounts(struct mnt_namespace *ns, struct mount *mnt)
 static int attach_recursive_mnt(struct mount *source_mnt,
 			struct mount *dest_mnt,
 			struct mountpoint *dest_mp,
-			bool moving)
+			bool moving, bool no_propagate)
 {
 	struct user_namespace *user_ns = current->nsproxy->mnt_ns->user_ns;
 	HLIST_HEAD(tree_list);
@@ -2122,7 +2122,7 @@ static int attach_recursive_mnt(struct mount *source_mnt,
 			goto out;
 	}
 
-	if (IS_MNT_SHARED(dest_mnt)) {
+	if (IS_MNT_SHARED(dest_mnt) && !no_propagate) {
 		err = invent_group_ids(source_mnt, true);
 		if (err)
 			goto out;
@@ -2234,7 +2234,7 @@ static int graft_tree(struct mount *mnt, struct mount *p, struct mountpoint *mp)
 	      d_is_dir(mnt->mnt.mnt_root))
 		return -ENOTDIR;
 
-	return attach_recursive_mnt(mnt, p, mp, false);
+	return attach_recursive_mnt(mnt, p, mp, false, false);
 }
 
 /*
@@ -2654,7 +2654,8 @@ out:
 	return ret;
 }
 
-static int do_move_mount(struct path *old_path, struct path *new_path)
+static int do_move_mount(struct path *old_path, struct path *new_path,
+		         bool no_propagate)
 {
 	struct mnt_namespace *ns;
 	struct mount *p;
@@ -2716,7 +2717,7 @@ static int do_move_mount(struct path *old_path, struct path *new_path)
 			goto out;
 
 	err = attach_recursive_mnt(old, real_mount(new_path->mnt), mp,
-				   attached);
+				   attached, no_propagate);
 	if (err)
 		goto out;
 
@@ -2748,7 +2749,7 @@ static int do_move_mount_old(struct path *path, const char *old_name)
 	if (err)
 		return err;
 
-	err = do_move_mount(&old_path, path);
+	err = do_move_mount(&old_path, path, false);
 	path_put(&old_path);
 	return err;
 }
@@ -3610,7 +3611,8 @@ SYSCALL_DEFINE5(move_mount,
 	if (ret < 0)
 		goto out_to;
 
-	ret = do_move_mount(&from_path, &to_path);
+	ret = do_move_mount(&from_path, &to_path,
+			    flags & MOVE_MOUNT_NO_PROPAGATE);
 
 out_to:
 	path_put(&to_path);
