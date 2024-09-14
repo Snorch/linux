@@ -192,7 +192,13 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 	pid->level = ns->level;
 
 	for (i = ns->level; i >= 0; i--) {
+		bool pidns_ready = true;
 		int tid = 0;
+
+		read_lock(&tasklist_lock);
+		if (!tmp->child_reaper)
+			pidns_ready = false;
+		read_unlock(&tasklist_lock);
 
 		if (set_tid_size) {
 			tid = set_tid[ns->level - i];
@@ -204,7 +210,7 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 			 * Also fail if a PID != 1 is requested and
 			 * no PID 1 exists.
 			 */
-			if (tid != 1 && !tmp->child_reaper)
+			if (tid != 1 && !pidns_ready)
 				goto out_free;
 			retval = -EPERM;
 			if (!checkpoint_restore_ns_capable(tmp->user_ns))
@@ -224,6 +230,8 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 			 */
 			if (nr == -ENOSPC)
 				nr = -EEXIST;
+		} else if (!pidns_ready && idr_get_cursor(&tmp->idr) != 0) {
+			nr = -EINVAL;
 		} else {
 			int pid_min = 1;
 			/*
