@@ -42,6 +42,7 @@ reject_tg6(struct sk_buff *skb, const struct xt_action_param *par)
 		nf_send_unreach6(net, skb, ICMPV6_NOROUTE, xt_hooknum(par));
 		break;
 	case IP6T_ICMP6_ADM_PROHIBITED:
+		trace_skb_reject(skb, "IP6T_ICMP6_ADM_PROHIBITED");
 		nf_send_unreach6(net, skb, ICMPV6_ADM_PROHIBITED,
 				 xt_hooknum(par));
 		break;

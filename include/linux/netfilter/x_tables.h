@@ -442,6 +442,8 @@ struct nf_hook_ops *xt_hook_ops_alloc(const struct xt_table *, nf_hookfn *);
 int xt_register_template(const struct xt_table *t, int(*table_init)(struct net *net));
 void xt_unregister_template(const struct xt_table *t);
 
+void trace_skb_reject(struct sk_buff *skb, char *msg);
+
 #ifdef CONFIG_NETFILTER_XTABLES_COMPAT
 #include <net/compat.h>
 

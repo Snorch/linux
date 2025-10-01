@@ -50,9 +50,11 @@ reject_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		nf_send_unreach(skb, ICMP_NET_ANO, hook);
 		break;
 	case IPT_ICMP_HOST_PROHIBITED:
+		trace_skb_reject(skb, "IPT_ICMP_HOST_PROHIBITED");
 		nf_send_unreach(skb, ICMP_HOST_ANO, hook);
 		break;
 	case IPT_ICMP_ADMIN_PROHIBITED:
+		trace_skb_reject(skb, "IPT_ICMP_ADMIN_PROHIBITED");
 		nf_send_unreach(skb, ICMP_PKT_FILTERED, hook);
 		break;
 	case IPT_TCP_RESET:

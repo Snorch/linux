@@ -1982,6 +1982,34 @@ static struct pernet_operations xt_net_ops = {
 	.size = sizeof(struct xt_pernet),
 };
 
+void trace_skb_reject(struct sk_buff *skb, char *msg)
+{
+	int protocol;
+
+	switch (skb->protocol) {
+	case htons(ETH_P_IP):
+		protocol = 4;
+		break;
+	case htons(ETH_P_IPV6):
+		protocol = 6;
+		break;
+	default:
+		trace_printk("REJECT unknown-protocol: skb->protocol=0x%04x: %s\n", ntohs(skb->protocol), msg);
+		return;
+	}
+
+	if (protocol == 4) {
+		struct iphdr *hdr = ip_hdr(skb);
+		trace_printk("REJECT IPv4: from %pI4 to %pI4: %s\n", &hdr->saddr, &hdr->daddr, msg);
+	} else if (protocol == 6) {
+		struct ipv6hdr *hdr = ipv6_hdr(skb);
+		trace_printk("REJECT IPv6: from %pI6 to %pI6: %s\n", &hdr->saddr, &hdr->daddr, msg);
+	}
+
+	return;
+}
+EXPORT_SYMBOL(trace_skb_reject);
+
 static int __init xt_init(void)
 {
 	unsigned int i;
