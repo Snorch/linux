@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/cgroup.h>
+#include <linux/ratelimit.h>
+#include <linux/sysctl.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
+#include <linux/sched/task_stack.h>
 #include <linux/sched/signal.h>
+#include <linux/sched/debug.h>
 
 #include "cgroup-internal.h"
 
@@ -349,3 +353,120 @@ void cgroup_freeze(struct cgroup *cgrp, bool freeze)
 		cgroup_file_notify(&cgrp->events_file);
 	}
 }
+
+#define MAX_STACK_TRACE_DEPTH 64
+
+static struct task_struct *get_unfreezable_task(struct cgroup *cgrp)
+{
+	struct cgroup_subsys_state *css;
+
+	guard(rcu)();
+	css_for_each_descendant_post(css, &cgrp->self) {
+		struct task_struct *task;
+		struct css_task_iter it;
+
+		css_task_iter_start(css, 0, &it);
+		while ((task = css_task_iter_next(&it))) {
+			if (task->flags & PF_KTHREAD)
+				continue;
+			if (task->frozen)
+				continue;
+
+			task = get_task_struct(task);
+			css_task_iter_end(&it);
+			return task;
+		}
+		css_task_iter_end(&it);
+	}
+
+	return NULL;
+}
+
+static void warn_freeze_timeout(struct cgroup *cgrp, int timeout)
+{
+	char *cg_path __free(kfree) = NULL;
+	struct task_struct *task;
+
+	cg_path = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!cg_path)
+		return;
+
+	if (cgroup_path(cgrp, cg_path, PATH_MAX) < 0)
+		return;
+
+	task = get_unfreezable_task(cgrp);
+	if (task) {
+		pid_t tgid;
+
+		tgid = task_pid_nr_ns(task, &init_pid_ns);
+		pr_warn("Freeze of %s took %ld sec, due to unfreezable process %d:%s.\n",
+			cg_path, timeout / USEC_PER_SEC, tgid, task->comm);
+
+		if (try_get_task_stack(task)) {
+			show_stack(task, NULL, KERN_WARNING);
+			put_task_stack(task);
+		}
+
+		put_task_struct(task);
+		return;
+	}
+
+	pr_warn("Freeze of %s took %ld sec, but no unfreezable process detected.\n",
+		cg_path, timeout / USEC_PER_SEC);
+}
+
+#define DEFAULT_FREEZE_RATELIMIT (30 * HZ)
+int sysctl_freeze_timeout_us;
+
+void check_freeze_timeout(struct cgroup *cgrp)
+{
+	static DEFINE_RATELIMIT_STATE(freeze_timeout_rs,
+				      DEFAULT_FREEZE_RATELIMIT, 1);
+	unsigned int sequence;
+	u64 last_freeze_start = 0;
+	u64 last_freeze_time;
+	int timeout;
+
+	timeout = READ_ONCE(sysctl_freeze_timeout_us);
+	if (!timeout)
+		return;
+
+	do {
+		sequence = read_seqcount_begin(&cgrp->freezer.freeze_seq);
+		if (test_bit(CGRP_FREEZE, &cgrp->flags) &&
+		    !test_bit(CGRP_FROZEN, &cgrp->flags))
+			last_freeze_start = cgrp->freezer.freeze_start_nsec;
+	} while (read_seqcount_retry(&cgrp->freezer.freeze_seq, sequence));
+
+	if (!last_freeze_start)
+		return;
+
+	last_freeze_time = ktime_get_ns() - last_freeze_start;
+	do_div(last_freeze_time, NSEC_PER_USEC);
+
+	if (last_freeze_time < timeout)
+		return;
+
+	if (!__ratelimit(&freeze_timeout_rs))
+		return;
+
+	warn_freeze_timeout(cgrp, timeout);
+}
+
+static const struct ctl_table freezer_sysctls[] = {
+	{
+		.procname	= "freeze_timeout_us",
+		.data		= &sysctl_freeze_timeout_us,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+	},
+};
+
+static int __init freezer_sysctls_init(void)
+{
+	register_sysctl_init("kernel", freezer_sysctls);
+	return 0;
+}
+late_initcall(freezer_sysctls_init);
